@@ -1,0 +1,283 @@
+---
+title: "pre-processing"
+author: " "
+date: " "
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      dpi = 400)
+library(tidyverse)
+library(rio)
+library(mgcv)
+```
+
+
+
+
+###Loading data
+```{r}
+load(file = here::here("Data",
+                       "ss_dat_full.RData"))
+```
+
+
+
+
+
+### Identify critical strain before stress fall sharply for all alloys,
+
+
+
+
+```{r}
+ss_dat_t <- ss_dat_all %>%
+  filter(test_type == "Tension")
+
+max_stress_t <- ss_dat_t %>%
+  group_by(alloy_id, rep)%>% 
+  summarize(stress = max(stress, na.rm = TRUE))%>%
+  ungroup()
+
+
+failure_points_t <- ss_dat_t%>%
+                      inner_join(max_stress_t, 
+                                 by = c("alloy_id", "stress", "rep"))
+
+
+ss_dat_c <- ss_dat_all %>%
+  filter(test_type == "Compresion")
+
+max_stress_c <- ss_dat_c %>%
+  group_by(alloy_id, rep)%>% 
+  summarize(stress = max(stress, na.rm = TRUE))%>%
+  ungroup()
+
+
+failure_points_c <- ss_dat_c%>%
+                      inner_join(max_stress_c, 
+                                 by = c("alloy_id","stress", "rep"))
+```
+
+
+
+
+
+### Joining max_strain column to the dataset
+
+```{r}
+
+max_strain_t = failure_points_t%>%
+                select(strain , stress, alloy_id, rep)%>%
+                rename(max_strain = strain,
+                       max_stress = stress)
+
+
+ss_dat_t = ss_dat_t%>%
+            left_join(max_strain_t, 
+                      by= c("alloy_id", "rep"))
+                         
+
+
+max_strain_c = failure_points_c%>%
+                select(strain , stress, alloy_id, rep)%>%
+                rename(max_strain = strain,
+                       max_stress = stress)
+
+
+ss_dat_c = ss_dat_c%>%
+            left_join(max_strain_c, 
+                      by= c("alloy_id", "rep"))
+
+```
+
+
+
+
+### Filtering based on critical strain, scaling the strain axis 0-1 and plotting to check
+
+```{r}
+ss_dat_t_filtered = ss_dat_t %>%
+                    filter(strain < max_strain | is.na(max_strain))%>%
+                    group_by(alloy_id, rep)%>%
+                    unite("alloy_rep_id", 
+                          c("alloy_id", "rep"),
+                          remove = F)%>%
+                    mutate(scaled_strain = strain / max_strain,
+                           scaled_stress = stress / max_stress,
+                           alloy_id = factor(alloy_id),
+                           rep_f = factor(rep),
+                           alloy_rep_id = factor(alloy_rep_id))%>%
+                    ungroup()
+
+ss_dat_t_filtered %>%
+  unite("plot_id", 
+        c("alloy_id", "rep"),
+        remove = F)%>%
+  mutate(elements = (Mo>0) + (Nb>0) + (Ta>0) + (V>0) + (W>0),
+         elements = factor(elements))%>%
+  ggplot(aes(x = strain,
+             y = stress,
+             group = plot_id,
+             color = elements))+
+  geom_line(alpha = 0.5)+
+  scale_color_brewer(palette = "Set1")+
+  theme_bw()+
+  theme(legend.position = "right")
+
+```
+
+
+
+```{r}
+
+ss_dat_c_filtered = ss_dat_c %>%
+                    filter(strain < max_strain | is.na(max_strain))%>%
+                    group_by(alloy_id, rep)%>%
+                    unite("alloy_rep_id", 
+                          c("alloy_id", "rep"),
+                          remove = F)%>%
+                    mutate(scaled_strain = strain / max_strain,
+                           scaled_stress = stress / max_stress,
+                           alloy_id = factor(alloy_id),
+                           rep_f = factor(rep),
+                           alloy_rep_id = factor(alloy_rep_id))%>%
+                    ungroup()
+
+ss_dat_c_filtered %>%
+  ggplot(aes(x = scaled_strain,
+             y = scaled_stress,
+             group = alloy_rep_id,
+             color = alloy_id))+
+  geom_line(alpha = 0.45)+
+  theme_bw()+
+  theme(legend.position = "none")
+```
+
+```{r}
+save(ss_dat_c_filtered,
+     ss_dat_t_filtered,
+     file = here::here("Data", "dat_filtered.RData"))
+```
+
+
+
+### Othonormal basis fitting
+
+```{r}
+source(here::here("Functions",
+                  "utilities.R"))
+```
+
+
+```{r}
+dat_orth_coefs_t <- fit_leg_basis_mod_fun(ss_dat = ss_dat_t_filtered%>%
+                                            mutate(scaled_stress = stress),
+                                          n_funs = 4,
+                                          intercept = T)
+
+dat_orth_coefs_c <- fit_leg_basis_mod_fun(ss_dat = ss_dat_c_filtered%>%
+                                            mutate(scaled_stress = stress),
+                                          n_funs = 4,
+                                          intercept = T)
+```
+
+
+```{r}
+dat_orth_coefs_pred_t <- fit_leg_basis_mod_fun(ss_dat = ss_dat_t_filtered%>%
+                                            mutate(scaled_stress = stress),
+                                          n_funs = 4,
+                                          intercept = T,
+                                          return_pred = T)
+
+dat_orth_coefs_pred_c <- fit_leg_basis_mod_fun(ss_dat = ss_dat_c_filtered%>%
+                                            mutate(scaled_stress = stress),
+                                          n_funs = 4,
+                                          intercept = T,
+                                          return_pred = T)
+```
+
+```{r}
+dat_pred <- bind_rows(dat_orth_coefs_pred_c$preds,
+                      dat_orth_coefs_pred_t$preds)
+```
+
+Visualizing integrals 
+
+```{r fig.height=4, fig.width=9}
+metals <- c("Mo", "Nb", "Ta", "V","W", "Mo_Nb_Ta_V_W")
+ss_dat_all%>%
+  filter(alloy %in% metals,
+         strain < 0.2)%>%
+  mutate(alloy = factor(alloy,
+                        levels = metals))%>%
+  ggplot(aes(x=strain,
+             y=stress,
+             colour = alloy))+
+  geom_ribbon(aes(ymax=pred_stress,
+                  fill = alloy),
+              ymin = 0, alpha = 0.5,
+            data = dat_pred%>%
+              filter(alloy %in% metals)%>%
+  mutate(alloy = factor(alloy,
+                        levels = metals)))+
+  geom_line(linewidth = 1)+
+  scale_color_brewer(palette =  "Paired")+
+   scale_fill_brewer(palette =  "Paired")+
+  facet_grid(test_type~alloy,
+             scales = "free")+
+  theme_bw()
+```
+
+```{r}
+dat_alloy <- ss_dat_c_filtered%>%
+                          arrange(alloy_rep_id)%>%
+                          group_by(alloy_rep_id)%>%
+                          slice_head(n=1)%>%
+            ungroup()%>%
+            select(alloy_rep_id,alloy,Mo,Nb,Ta,V,W, rep, Experiment, alloy_cnt)
+```
+
+
+
+```{r}
+dat_orth_coefs_c%>%
+  left_join(dat_alloy,
+                        by = "alloy_rep_id")%>%
+  filter(alloy %in% c("NbV","V","Nb"))%>%
+  mutate(rep = factor(rep))%>%
+  ggplot(aes(x=Nb,
+             y = val))+
+  geom_point(aes(color= rep))+
+  facet_wrap(~coef_names,
+             scales = "free")+
+  theme_bw()
+```
+
+### Export the coeficients
+
+```{r}
+out_dat_t <- dat_orth_coefs_t%>%
+              pivot_wider(names_from = "coef_names",
+                          values_from = "val")%>%
+              left_join(dat_alloy,
+                        by = "alloy_rep_id")%>%
+                ungroup()
+
+export(out_dat_t,
+       file =here::here("Data",
+                        "ss_all_ort_coefs_t_uns.csv"))
+
+out_dat_c <- dat_orth_coefs_c%>%
+              pivot_wider(names_from = "coef_names",
+                          values_from = "val")%>%
+              left_join(dat_alloy,
+                        by = "alloy_rep_id")%>%
+                ungroup()
+
+export(out_dat_c,
+       file =here::here("Data",
+                        "ss_all_ort_coefs_c_uns.csv"))
+```
+
