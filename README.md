@@ -2,6 +2,6 @@
 
 Code for the paper on surrogate modeling of stress-strain curves of nanowires.
 
-This repository contains a zip file with the corresponding RStudio project.
+This repository contains all files associated with the paper "Multivariate heteroskedastic Gaussian process for surrogate modeling of stress-strain curves of nanowires".
 
-The project contains all the functions and files requires to run simplified examples from the paper. 
+The development was done in an RStudio project that contains all the functions and files requires to run simplified examples from the paper. The zip file contains the project itself for easy of running on other machines.
